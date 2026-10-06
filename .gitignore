@@ -1,0 +1,43 @@
+# Python
+.Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+.venv/
+venv/
+env/
+
+# Django
+*.log
+*.pot
+*.mo
+*.js.map
+*.css.map
+db.sqlite3
+media/
+static/
+
+# JavaScript/Node
+node_modules/
+build/
+.env.local
+.env*.local
+
+# macOS
+.DS_Store
+
+# VSCode
+.vscode/
+
+# IDEs
+.idea/
+.project/
+.settings/
+.classpath/
+
+# Editor config
+.editorconfig
+
+# Other
+*.env 

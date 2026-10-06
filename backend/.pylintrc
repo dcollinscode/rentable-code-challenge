@@ -1,0 +1,9 @@
+[MESSAGES CONTROL]
+disable=
+    no-member,
+    E1101, # For django objects manager
+    E1136 # For `self.style.SUCCESS` and similar dynamic attributes
+
+[TYPECHECK]
+generated-members=
+    objects 
