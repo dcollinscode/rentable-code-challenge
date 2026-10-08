@@ -1,0 +1,175 @@
+# FINDINGS.md — Reconnaissance Pass
+
+A read-only reconnaissance of the Rentable Full Stack Code Challenge repo,
+comparing the existing code against `backend/api/integration-data/PMS_API_SPEC.md`
+and the live simulated PMS API.
+
+---
+
+## 1. Summary of the System As It Exists
+
+### Data model (`backend/api/models.py`)
+- `Tenant`: `name` (CharField), `unit` (CharField, nullable). Uses Django's
+  auto `BigAutoField` PK (`id`).
+- `Transaction`: FK `tenant` → `Tenant`, `date` (DateField),
+  `description` (CharField), `amount` (DecimalField, 2 dp).
+  **No `type` field**, **no external/PMS transaction id field**, and the PK is
+  the Django auto `BigAutoField` (models.py:14-19).
+
+### Seed command (`backend/api/management/commands/seed_data.py`)
+- Creates exactly **three** tenants via `get_or_create` keyed on `name`
+  (seed_data.py:9-11):
+  - Alice Wonderland / A101
+  - Bob The Builder / B202
+  - Charlie Chaplin / C303
+- Since these are the first rows inserted, their Django PKs become **1, 2, 3**.
+
+### Import command (`backend/api/management/commands/import_transactions.py`)
+- Fetches `GET .../tenants/` **without any query string** (no `includeLedgers`)
+  (import_transactions.py:14-16).
+- For each tenant it does `Tenant.objects.get(id=tenant_id)` — resolving the
+  local `Tenant` **by Django PK** against the PMS `tenant_id`
+  (import_transactions.py:22).
+- For each entry in `tenant_data.get('ledger', [])` it calls
+  `Transaction.objects.update_or_create(id=..., defaults={...})` — i.e. it keys
+  the upsert on the **Django PK** `id`, setting it to the PMS ledger entry `id`
+  (import_transactions.py:31-39).
+- Stores: `tenant`, `date` (parsed `%Y-%m-%d`), `description`, `amount`.
+  It **drops** the ledger entry's `type` field.
+
+### Backend API (`backend/api/views.py`, `urls.py`, `serializers.py`)
+- `GET /api/tenants/` → all tenants (`TenantSerializer`, `fields = '__all__'`).
+- `GET /api/transactions/` → **all** transactions; the docstring claims it is
+  "optionally filtered by tenant" but **no filtering is implemented** — the
+  `tenant` query param is ignored (views.py:22-28).
+- `TransactionSerializer` exposes `id, tenant, date, description, amount`
+  (serializers.py:9-11).
+- No balance endpoint or computed balance field anywhere.
+
+### Frontend (`frontend/src/App.js`, `frontend/src/TenantList.js`)
+- `TenantList` fetches `/api/tenants/` on mount and renders an ID / Name / Unit
+  table with a `<button>View Ledger</button>` (TenantList.js:45).
+- **The button has no `onClick` handler** — clicking it does nothing.
+- No ledger view, no transaction fetching from the UI, no balance display.
+
+---
+
+## 2. Comparison of Code vs. PMS API Spec
+
+### Does the import command request the ledgers from the API?
+**No.** `import_transactions.py:15` calls the bare `/tenants/` endpoint. The
+spec (`PMS_API_SPEC.md`) documents a query param:
+`includeLedgers` — "When `true`, includes the tenant's ledger in the response."
+
+Confirmed against the live API:
+
+- `GET .../tenants/` → each object is `{tenant_id, name, unit}` — **no `ledger` key**.
+- `GET .../tenants/?includeLedgers=true` → each object additionally has a
+  populated `ledger` array.
+
+Because the command never passes `includeLedgers=true`,
+`tenant_data.get('ledger', [])` always evaluates to `[]`, so **the import
+silently loads zero transactions** while still printing
+`Successfully imported transaction data.`
+
+### How does it resolve tenants — Django PK or PMS tenant_id?
+It **conflates the two**. `import_transactions.py:22` does
+`Tenant.objects.get(id=tenant_id)`, treating the PMS `tenant_id` as the local
+Django PK. This only works by coincidence when the local rows were seeded in the
+same order/identity as the PMS. It is not a stable join key.
+
+### How does it upsert transactions — keyed on what?
+`import_transactions.py:31-39` keys on the **local Django PK**:
+`Transaction.objects.update_or_create(id=transaction_data.get('id'), ...)`.
+So it assigns the **PMS ledger entry id** as the local auto PK. This risks PK
+collisions with rows created by any other path and is not a proper external-id
+mapping. Correct behavior is to add a dedicated external id field (e.g.
+`pms_transaction_id`) and upsert on `(tenant, pms_transaction_id)`.
+
+### What fields does it store vs. what the API provides?
+| API ledger field | Stored? |
+|---|---|
+| `id` | Used as **local PK** (mismatched semantics) |
+| `date` | Yes |
+| `description` | Yes |
+| `amount` | Yes |
+| `type` | **Dropped** (not in model, not stored) |
+
+The spec lists a `type` field ("Transaction type"); the model has no column for
+it and the command ignores it.
+
+### What should the balance be, per the spec?
+The API provides per-entry `amount` plus a `type` of `charge` or `payment`. The
+data is authored so that a signed running balance is meaningful:
+
+- `charge` entries are **debits** (increase what the tenant owes).
+- `payment` entries are **credits** (decrease what the tenant owes).
+- Some entries are already negative to model reversals/waivers, e.g. tenant 3
+  "Utility Credit" `-80.0`, tenant 5 "Late Fee Waived" `-50.0`, and
+  "Returned Payment - NSF" rows with negative amounts.
+
+Balance should therefore be computed from the signed amounts with `charge`
+increasing and `payment` decreasing the amount owed, i.e.
+`balance = Σ(charge.amount) − Σ(payment.amount)` (with signed values honored).
+Because neither `type` is stored nor a balance is exposed, the app currently
+cannot compute this at all.
+
+---
+
+## 3. Discrepancies Between Seed Data and the Live API
+
+Live API `GET .../tenants/` returned **200 tenants**; seed data creates **3**.
+
+| # | Discrepancy | Seed data | Live API | Impact |
+|---|---|---|---|---|
+| D1 | Tenant count | 3 tenants | 200 tenants | Import only ever resolves a handful; 197 tenants invisible locally |
+| D2 | Tenant 1 name/unit | Alice Wonderland / A101 | Alice Wonderland / A101 | Match |
+| D3 | Tenant 2 name/unit | Bob The Builder / **B202** | Bob The Builder / **B205** | Unit mismatch |
+| D4 | Tenant 3 name/unit | **Charlie Chaplin** / C303 | **Daisy Ridley** / C303 | Different person |
+| D5 | Tenant identity basis | Seeded by `name`, PK auto-increments 1–3 | `tenant_id` is an independent PMS key (1–200) | Join by PK works only by luck for rows 1–3 |
+| D6 | Ledger availability | n/a | Bare `/tenants/` returns **no `ledger`**; requires `?includeLedgers=true` | Import fetches nothing |
+| D7 | Ledger `id` vs local PK | Local `Transaction.id` is auto BigAutoField | PMS ledger ids are **strings** (`"3"`, `"21"`, …) | Assigning string ids to a BigAutoField PK; semantics clash |
+| D8 | Ledger `type` | Not modeled | Present (`charge`/`payment`) | Balance cannot be derived |
+
+Confirmation of tenant 3 (the subtle one): the live API returns
+`{"tenant_id": 3, "name": "Daisy Ridley", "unit": "C303"}`, but seed data
+creates `Charlie Chaplin` with `unit C303` as local PK 3. So an import keyed on
+PK 3 would attach Daisy Ridley's ledger to a differently-named local tenant.
+
+---
+
+## 4. What "Correct" Looks Like
+
+1. **Request ledgers correctly.** Call
+   `GET .../tenants/?includeLedgers=true` in `import_transactions.py` so the
+   `ledger` array is actually present. Consider guarding for a missing `ledger`
+   key and logging a real count of imported rows.
+2. **Stable tenant join key.** Add an explicit external key to `Tenant`
+   (e.g. `pms_tenant_id = IntegerField(unique=True, null=True)`) and upsert
+   tenants on that field rather than matching `tenant_id` to the Django PK.
+   Seed data should also set `pms_tenant_id`.
+3. **Stable transaction join key.** Add an external key to `Transaction`
+   (e.g. `pms_transaction_id = CharField(...)`) and upsert on
+   `(tenant, pms_transaction_id)`. Never overwrite the local auto PK with an
+   external id.
+4. **Store `type`.** Add a `type`/`transaction_type` field (choices
+   `charge`/`payment`) and persist it so balances can be computed and signed
+   values interpreted.
+5. **Balance.** Compute
+   `balance = Σ(charges) − Σ(payments)` honoring signed amounts, and expose it —
+   ideally as a serializer field / dedicated endpoint on the tenant (or the
+   transactions endpoint), since the accounting team explicitly needs "the
+   balance on there."
+6. **Tenant/transaction API correctness.** Implement the documented
+   `?tenant=<id>` filter on `transaction_list` (currently a no-op docstring
+   claim) so the frontend can fetch a single tenant's ledger.
+7. **Frontend "View Ledger".** Wire the button:
+   - `onClick` fetches `/api/transactions/?tenant=<id>` (see #6).
+   - Render the tenant's transactions and the **balance**.
+8. **Seed/import consistency.** Align seed data with the live API where they
+   overlap (fix Bob's unit B202→B205; reconcile tenant 3 name), or seed from the
+   API itself, to avoid attaching the wrong ledger to the wrong person.
+
+---
+
+*All line references are approximate to the current HEAD of the working tree.*

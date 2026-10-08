@@ -12,7 +12,7 @@ trap cleanup EXIT
 
 # Start Django backend
 cd backend
-python manage.py runserver 0.0.0.0:8009 &
+python3 manage.py runserver 0.0.0.0:8009 &
 cd ..
 
 # Start React frontend
