@@ -172,4 +172,56 @@ PK 3 would attach Daisy Ridley's ledger to a differently-named local tenant.
 
 ---
 
+## 5. Seed handling
+
+### Decision: delete the seed command (Option A)
+
+`backend/api/management/commands/seed_data.py` has been **deleted**. The
+`import_transactions` command is now the single source of truth for tenant
+data.
+
+**Why Option A over Option B.** Option B (rewrite the fixture to mirror the
+live API's first three tenants) would have fixed today's two visible bugs —
+Bob's unit `B202`→`B205` and Charlie Chaplin → Daisy Ridley — but it would not
+fix the *class* of bug. A hand-maintained fixture is a static copy of a live
+system, so the moment the PMS renames a tenant, moves them to a new unit, or
+adds rows 4…N, the fixture silently disagrees with production again and nobody
+is alerted. Option A removes the divergence at the source: the importer already
+upserts tenants keyed on the stable `pms_tenant_id` and refreshes `name`/`unit`
+on every run, so there is nothing left for a fixture to get wrong. Fewer moving
+parts, one code path, and the dev database is guaranteed to reflect the same
+data the accounting team sees.
+
+### The risk we resolved
+
+**A dev fixture that disagrees with production is worse than none.**
+
+The old seed looked harmless — three friendly tenants to populate a fresh
+database. But because it used *different identity semantics* than the importer
+(seed keyed on `name` and produced Django PKs 1–3; the PMS owns `tenant_id`
+1–200 as an independent key), it didn't just show wrong data, it **laid a
+trap**. Any code that joined the two worlds by row order/PK would silently
+attach real ledgers to the wrong people: PMS tenant 3 is "Daisy Ridley", but
+the seed made local row 3 "Charlie Chaplin". A fixture that returns *nothing*
+fails loudly and immediately; a fixture that returns *plausible but wrong*
+data fails silently and can only be caught by someone who happens to remember
+that Bob lives in B205, not B202. In an accounting context, wrong-but-believable
+data is the worst possible failure mode — it invites reconciliation decisions
+made on fiction.
+
+The fix removes that trap entirely: there is no longer a second, divergent
+source of tenant identity. Tenants are created only by the importer, from the
+live API, keyed on `pms_tenant_id`.
+
+### Changes made
+- Deleted `backend/api/management/commands/seed_data.py`.
+- Removed the seed step from `.devcontainer/post_create.sh`.
+- Updated `README.md` to point developers at `python manage.py
+  import_transactions` as the only supported way to load tenant data, and
+  removed the "seeds the database for you" language.
+- Left `DECISIONS.md`'s historical rationale intact but annotated it to note
+  the seed command has since been removed.
+
+---
+
 *All line references are approximate to the current HEAD of the working tree.*

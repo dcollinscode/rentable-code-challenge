@@ -20,7 +20,7 @@ There is a **React front end** that displays a list of Tenants with a button for
 
 There is a **Python and Django backend** with APIs that return tenants and their transactions. The Django backend utilizes a SQLite database.
 
-Transactions can be imported from the PMS integration API into the local database using the `import_transactions` management command. This command was written before the API spec was available and hasn't been checked against it.
+Transactions can be imported from the PMS integration API into the local database using the `import_transactions` management command. This command is the source of truth for tenant and transaction data: it pulls live tenants and their ledgers directly from the API.
 
 ### Simulated PMS API
 
@@ -32,7 +32,15 @@ Tenant and transaction data comes from a simulated external Property Management 
 
 ## Getting Started
 
-This repo includes a [Dev Container](https://containers.dev/) config (`.devcontainer/`). It's the quickest way to get running: the container installs dependencies, migrates, and seeds the database for you. Not using Dev Containers? `.devcontainer/post_create.sh` shows what you'd need to do yourself.
+This repo includes a [Dev Container](https://containers.dev/) config (`.devcontainer/`). It's the quickest way to get running: the container installs dependencies and migrates the database for you. Not using Dev Containers? `.devcontainer/post_create.sh` shows what you'd need to do yourself.
+
+To populate the database with tenant and transaction data, run the import command:
+
+```
+cd backend && python manage.py import_transactions && cd ..
+```
+
+This is the only supported way to load tenant data — there is no local seed fixture, so the database always reflects the live PMS integration API.
 
 Once set up, run `./start.sh` from the project root. The backend runs at [`http://127.0.0.1:8009/`](http://127.0.0.1:8009/) and the frontend at [`http://localhost:3009/`](http://localhost:3009/).
 
