@@ -44,6 +44,44 @@ This is the only supported way to load tenant data — there is no local seed fi
 
 Once set up, run `./start.sh` from the project root. The backend runs at [`http://127.0.0.1:8009/`](http://127.0.0.1:8009/) and the frontend at [`http://localhost:3009/`](http://localhost:3009/).
 
+### Reconciling the local data with the live PMS
+
+`reconcile_import` is a **read-only** command that proves the local database
+matches the live PMS integration API. It fetches the live tenants (with
+ledgers) and, for each tenant, checks that the tenant exists, and that the
+`name`, `unit`, transaction count, sum of raw amounts, and sum of signed
+amounts (charge `+`, payment `-`) all agree. It also reports any tenants that
+exist locally but are absent from the API.
+
+```
+cd backend && python manage.py reconcile_import && cd ..
+```
+
+It prints a per-tenant table:
+
+```
+tenant_id  name                  api_txns  db_txns  api_sum    db_sum    status
+1          Alice Wonderland      23        23       4120.00    4120.00   OK
+2          Bob The Builder       7         7        3125.00    3125.00   OK
+5          Ghost Tenant          0         3        0.00       250.00    LOCAL-ONLY
+```
+
+- **Exit code 0** when every row is `OK`, **exit code 1** if any mismatch is
+  found — so it can gate a CI job or a deploy.
+- Pass `--csv path/to/file.csv` to also write the table to a CSV file
+  (handy as evidence for a customer's accounting team).
+- It never writes to the database; its only output is stdout and the optional
+  CSV.
+
+**When to run it:**
+- **Before any customer-facing demo** — so you are never showing numbers that
+  disagree with the source of truth.
+- **Nightly in production** — to catch drift (a failed import, a partial sync,
+  a manual DB edit) the moment it appears rather than after it reaches a
+  customer's books.
+- **Whenever the import is suspected of failing** — run
+  `import_transactions` to refresh, then `reconcile_import` to confirm.
+
 ## The Challenge
 
 The Head of Accounting at Couchman & Wavehill, one of our largest customers, is asking for ledger functionality. Their accounting team needs more visibility into tenant financials to reconcile their books efficiently. A View Ledger button has been added, but it currently does nothing. When they click it, they should see that tenant's transactions. And they need to see the balance on there too. We're trying to expand our relationship with them, so we want to do everything we can so that they want to move forward.

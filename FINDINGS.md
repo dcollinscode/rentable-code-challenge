@@ -225,3 +225,76 @@ live API, keyed on `pms_tenant_id`.
 ---
 
 *All line references are approximate to the current HEAD of the working tree.*
+
+---
+
+## 6. Reconciliation
+
+`backend/api/management/commands/reconcile_import.py` is a **read-only** command
+that proves the local database matches the live PMS API. It fetches
+`GET .../tenants/?includeLedgers=true` and, for every tenant, compares:
+existence (by `tenant_id`), `name`, `unit`, transaction count, the sum of raw
+amounts, and the sum of signed amounts (charge `+`, payment `-`). It also
+reports tenants that exist locally but not in the API. It exits `0` when every
+row is `OK` and `1` otherwise, and can emit the same table as CSV via
+`--csv path/to/file.csv`. It makes no writes to the database.
+
+### Run against the live API
+
+Imported the live data first, then reconciled:
+
+```
+$ cd backend
+$ python3 manage.py import_transactions
+Import complete. Tenants: 200, Transactions: 4424, Skipped: 0
+
+$ python3 manage.py reconcile_import
+Reconciliation FAILED: 3 of 203 tenant(s) do not match the live API.
+tenant_id  name                  api_txns  db_txns  api_sum    db_sum    status
+1          Alice Wonderland      13        13       11840.00   11840.00  OK
+2          Bob The Builder       7         7        5625.00    5625.00   OK
+3          Daisy Ridley          10        10       8200.00    8200.00   OK
+...
+None       Alice Wonderland      0         0        0.00       0.00      LOCAL-ONLY
+None       Bob The Builder       0         0        0.00       0.00      LOCAL-ONLY
+None       Charlie Chaplin       0         0        0.00       0.00      LOCAL-ONLY
+```
+
+**The command did its job**: all 200 API tenants matched row-for-row, but it
+refused to report "clean" while three stale rows sat in the local DB. Those
+three rows (`pms_tenant_id IS NULL`, zero transactions, locally-keyed PKs 1-3)
+are leftovers of the now-deleted `seed_data` command from an earlier dev
+session — precisely the "wrong-but-believable" divergence flagged in §5, here
+caught by the reconciliation instead of by memory. They are the only rows in
+the database without a PMS identity and they back no ledger data.
+
+After removing those three orphaned rows (a one-off dev-DB cleanup, **not**
+something the command does — the command stays strictly read-only), the same
+command reports a fully clean pass:
+
+```
+$ python3 manage.py reconcile_import
+tenant_id  name                  api_txns  db_txns  api_sum    db_sum    status
+1          Alice Wonderland      13        13       11840.00   11840.00  OK
+2          Bob The Builder       7         7        5625.00    5625.00   OK
+3          Daisy Ridley          10        10       8200.00    8200.00   OK
+...
+199        William Mitchell      38        38       39970.00   39970.00  OK
+200        Hiroshi Andersson     10        10       15895.00   15895.00  OK
+Reconciliation OK: all 200 tenant(s) match the live API.
+```
+
+Exit code: **0**. All 200 tenants agree on name, unit, transaction count, raw
+amount sum, and signed amount sum. This is the artifact to hand to the
+customer's accounting team. (Verified rows 1-58 and 195-200 explicitly; all
+200 rows printed `OK`.)
+
+### Tests
+
+`backend/api/tests/test_reconcile_import.py` drives the command against a
+mocked API and asserts:
+- exit `0` when the local DB matches the API,
+- exit `1` on transaction-count, unit, and existence mismatches,
+- local-only tenants are reported,
+- `--csv` writes the matching table,
+- a failed API fetch raises `CommandError`.
