@@ -24,14 +24,26 @@ def welcome_message(request):
     """
     return Response({'message': 'Welcome to the Rentable Code Challenge!'})
 
+class TenantPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 @api_view(['GET'])
 def tenant_list(request):
     """
-    Returns a list of all tenants.
+    Returns a paginated list of all tenants, ordered by name (then id).
+
+    Paginated with DRF's standard envelope:
+    {count, next, previous, results}. The ordering is deterministic so that a
+    tenant never appears twice or is skipped as the client walks the pages.
+    Out-of-range pages return 404 (DRF default).
     """
-    tenants = Tenant.objects.all()
-    serializer = TenantSerializer(tenants, many=True)
-    return Response(serializer.data)
+    tenants = Tenant.objects.all().order_by('name', 'id')
+    paginator = TenantPagination()
+    page = paginator.paginate_queryset(tenants, request, view=tenant_list)
+    serializer = TenantSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
 
 @api_view(['GET'])
 def transaction_list(request):
@@ -102,4 +114,5 @@ class LedgerView(GenericAPIView):
                 'results': payload['transactions'],
             }
         )
+
 

@@ -109,9 +109,10 @@ failing** (refresh with `import_transactions`, then confirm with
 
 **What:** Known limitations are: tenant data is only as fresh as the last import
 (no background sync); the balance treats any non-`payment` type as a charge and
-does not model partial-payment or NSF timing; pagination is fixed at 50 with no
-page-size override; and reconciliation compares aggregates, not row-by-row
-contents.
+does not model partial-payment or NSF timing; the tenant ledger pagination is
+fixed at 50 with no page-size override (the tenants list, by contrast, is
+page-size configurable — see §9); and reconciliation compares aggregates, not
+row-by-row contents.
 
 **Why:** These are deliberate scope choices for the challenge rather than
 oversights — the importer is the single source of truth and the reconciler is the
@@ -120,6 +121,23 @@ individual `external_id`s rather than counts and sums) would catch rarer
 "same-total, different-rows" cases and is the natural next step, as is a scheduled
 import job. Each limitation is bounded and observable: if it matters, one of the
 existing checks will flag it before it reaches a customer's books.
+
+---
+
+## 9. Why the tenants list page size is 25
+
+**What:** `GET /api/tenants/` uses DRF `PageNumberPagination` with `page_size =
+25`, `page_size_query_param = "page_size"`, and `max_page_size = 100`, ordered by
+`name` then `id`.
+
+**Why:** 25 is the sweet spot for a table view: it is small enough that the first
+paint only renders a screen-and-a-half of rows (the original complaint was that
+200 rows rendered at once), yet large enough to cover a typical result in a single
+page without the user paging. The `page_size` query param lets a client opt into
+denser or lighter views, and `max_page_size = 100` caps the worst case so a single
+request can never pull the whole 200-tenant table and defeat the point. Ordering
+by `name` with `id` as a tiebreaker makes the slice deterministic, so a tenant can
+never appear twice or be skipped as the client pages through.
 
 ---
 
