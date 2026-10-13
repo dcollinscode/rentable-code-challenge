@@ -72,15 +72,40 @@ class TenantListEndpointTests(TestCase):
         names = [t["name"] for t in page_one["results"] + page_two["results"]]
         self.assertEqual(names, sorted(names))
 
-    def test_next_link_is_absolute_and_preserves_path(self):
+    def test_next_link_is_relative_and_preserves_path(self):
         self._make_tenants(30)
 
         data = self.client.get(self._url()).json()
 
         self.assertIsNotNone(data["next"])
+        # Path-relative, NOT an absolute URL. Absolute links are built from the
+        # request Host and break the SPA behind the dev proxy (CORS).
+        self.assertFalse(data["next"].startswith("http"))
+        self.assertTrue(data["next"].startswith("/api/"))
         self.assertIn("/api/tenants/", data["next"])
         self.assertIn("page=2", data["next"])
-        self.assertTrue(data["next"].startswith("http"))
+
+    def test_previous_link_is_relative(self):
+        self._make_tenants(30)
+
+        data = self.client.get(self._url({"page": 2})).json()
+
+        self.assertIsNotNone(data["previous"])
+        self.assertFalse(data["previous"].startswith("http"))
+        self.assertTrue(data["previous"].startswith("/api/"))
+
+    def test_next_link_preserves_query_string(self):
+        # The page_size param must survive onto the next link, so paging keeps
+        # the caller's chosen page size instead of silently reverting.
+        self._make_tenants(200)
+
+        data = self.client.get(self._url({"page_size": 10})).json()
+
+        self.assertIsNotNone(data["next"])
+        self.assertIn("page_size=10", data["next"])
+        self.assertIn("page=2", data["next"])
+        # Still path-relative.
+        self.assertTrue(data["next"].startswith("/api/"))
 
     def test_out_of_range_page_returns_404(self):
         self._make_tenants(30)

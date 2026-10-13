@@ -16,6 +16,20 @@ export interface Tenant {
 }
 
 /**
+ * The standard DRF `PageNumberPagination` envelope. `next`/`previous` are
+ * absolute URLs (or null at either end), so a client can follow them directly
+ * without reconstructing query strings.
+ *
+ * GET /api/tenants/  ->  Paginated<Tenant>
+ */
+export interface Paginated<T> {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+}
+
+/**
  * Mirrors `LedgerTransactionSerializer` in the ledger payload.
  * Note: `date` is a DRF DateField serialized as "YYYY-MM-DD".
  * `amount` is a DRF DecimalField serialized as a *string* (coerce_to_string).

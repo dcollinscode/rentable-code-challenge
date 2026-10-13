@@ -126,9 +126,9 @@ existing checks will flag it before it reaches a customer's books.
 
 ## 9. Why the tenants list page size is 25
 
-**What:** `GET /api/tenants/` uses DRF `PageNumberPagination` with `page_size =
-25`, `page_size_query_param = "page_size"`, and `max_page_size = 100`, ordered by
-`name` then `id`.
+**What:** `GET /api/tenants/` uses `RelativePageNumberPagination` (see §10) with
+`page_size = 25`, `page_size_query_param = "page_size"`, and `max_page_size =
+100`, ordered by `name` then `id`.
 
 **Why:** 25 is the sweet spot for a table view: it is small enough that the first
 paint only renders a screen-and-a-half of rows (the original complaint was that
@@ -138,6 +138,17 @@ denser or lighter views, and `max_page_size = 100` caps the worst case so a sing
 request can never pull the whole 200-tenant table and defeat the point. Ordering
 by `name` with `id` as a tiebreaker makes the slice deterministic, so a tenant can
 never appear twice or be skipped as the client pages through.
+
+## 10. Pagination links are relative
+
+DRF's default `PageNumberPagination` builds next/previous URLs from the request's
+Host header. In dev, the backend is reached at `127.0.0.1:8009` while the SPA is
+served at `localhost:3009`, so the absolute links were cross-origin and blocked by
+CORS. A client-side normalizer worked but had to be applied on every fetch path.
+Returning relative paths from the API removes the class of bug entirely: the
+client resolves links against its own origin, the dev proxy forwards them to the
+backend, and in production the same code works because the SPA and the API share
+an origin (or a configured proxy).
 
 ---
 

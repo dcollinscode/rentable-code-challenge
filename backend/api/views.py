@@ -8,6 +8,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework import status
 from api.models import Tenant, Transaction
+from api.pagination import RelativePageNumberPagination
 from api.serializers import (
     TenantSerializer,
     TransactionSerializer,
@@ -24,11 +25,6 @@ def welcome_message(request):
     """
     return Response({'message': 'Welcome to the Rentable Code Challenge!'})
 
-class TenantPagination(PageNumberPagination):
-    page_size = 25
-    page_size_query_param = 'page_size'
-    max_page_size = 100
-
 @api_view(['GET'])
 def tenant_list(request):
     """
@@ -38,9 +34,13 @@ def tenant_list(request):
     {count, next, previous, results}. The ordering is deterministic so that a
     tenant never appears twice or is skipped as the client walks the pages.
     Out-of-range pages return 404 (DRF default).
+
+    The paginator returns *relative* next/previous links (e.g.
+    "/api/tenants/?page=2") so the client resolves them against its own origin
+    and avoids the dev-mode cross-origin (CORS) trap — see pagination.py.
     """
     tenants = Tenant.objects.all().order_by('name', 'id')
-    paginator = TenantPagination()
+    paginator = RelativePageNumberPagination()
     page = paginator.paginate_queryset(tenants, request, view=tenant_list)
     serializer = TenantSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
