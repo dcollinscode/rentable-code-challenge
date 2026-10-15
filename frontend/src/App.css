@@ -81,7 +81,41 @@
   color: #61dafb;
 }
 
-/* --- Tenants pagination --- */
+/* --- Tenants sort toolbar --- */
+
+.tenant-toolbar {
+  width: 80%;
+  margin: 0 auto 12px;
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.tenant-toolbar__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tenant-toolbar__label {
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.tenant-toolbar__select {
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  background: #fff;
+}
+
+.tenant-empty {
+  width: 80%;
+  margin: 20px auto;
+  color: #6b7280;
+}
 
 /* Scrollable wrapper: page changes scroll *this* to top, not the window. */
 .tenant-table-container {

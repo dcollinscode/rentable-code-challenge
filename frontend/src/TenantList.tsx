@@ -5,7 +5,43 @@ import { Paginated, Tenant } from './types';
 import './App.css';
 
 /** The first page is always fetched from the bare endpoint. */
-const FIRST_PAGE_URL = '/api/tenants/';
+const BASE_URL = '/api/tenants/';
+
+/**
+ * The "Sort by" choices exposed in the toolbar. `value` is exactly the
+ * `ordering` query value the backend accepts (see backend/api/views.py), so
+ * "Default order" asks for the raw database order (id ascending) explicitly
+ * rather than relying on the endpoint's implicit default.
+ */
+type OrderingValue = 'id' | 'name' | '-name';
+
+interface OrderingOption {
+    value: OrderingValue;
+    label: string;
+}
+
+const ORDERING_OPTIONS: OrderingOption[] = [
+    { value: 'id', label: 'Default order' },
+    { value: 'name', label: 'Name (A–Z)' },
+    { value: '-name', label: 'Name (Z–A)' },
+];
+
+/** The sort applied on first render (raw database order). */
+const DEFAULT_ORDERING: OrderingValue = 'id';
+
+/**
+ * Build the *first-page* URL for the given ordering.
+ *
+ * Pagination beyond page 1 is driven entirely by the server's `next`/`previous`
+ * links (which already carry the query string), so this is only used to restart
+ * at page 1 whenever the sort changes. Reconstructing only the first page keeps
+ * the client from having to re-derive the canonical query string on every page.
+ */
+function buildFirstPageUrl(ordering: OrderingValue): string {
+    const params = new URLSearchParams();
+    params.set('ordering', ordering);
+    return `${BASE_URL}?${params.toString()}`;
+}
 
 /**
  * One entry in the pagination history. We keep the URL we fetched *and* the
@@ -18,8 +54,8 @@ interface PageEntry {
     offset: number;
 }
 
- /** What the user sees while a request is in flight. */
-type LoadKind = 'initial' | 'page' | null;
+/** What the user sees while a request is in flight. */
+type LoadKind = 'initial' | 'page' | 'sort' | null;
 
 function errorMessage(err: unknown): string {
     if (err instanceof TenantsApiError) {
@@ -50,25 +86,40 @@ const SkeletonRows: React.FC = () => (
 function TenantList() {
     const [data, setData] = useState<Paginated<Tenant> | null>(null);
     const [loadKind, setLoadKind] = useState<LoadKind>('initial');
-    // Errors are split: a first-load failure replaces the table, a paging
-    // failure is shown *under* the table while the current rows stay put.
+    // Errors are split: a first-load failure replaces the table, a paging or
+    // sort failure is shown *under* the table while the current rows stay put.
     const [initialError, setInitialError] = useState<string | null>(null);
     const [pageError, setPageError] = useState<string | null>(null);
 
+    // The active sort. Defaults to the raw database order.
+    const [ordering, setOrdering] = useState<OrderingValue>(DEFAULT_ORDERING);
+
     // History stack of visited pages + the index of the current one. This lets
-    // Previous walk back to the exact offset the user came from.
+    // Previous walk back to the exact offset the user came from. The first entry
+    // uses the default ordering's first-page URL.
     const [history, setHistory] = useState<PageEntry[]>([
-        { url: FIRST_PAGE_URL, offset: 0 },
+        { url: buildFirstPageUrl(DEFAULT_ORDERING), offset: 0 },
     ]);
     const [historyIndex, setHistoryIndex] = useState(0);
 
     const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
 
     const tableContainerRef = useRef<HTMLDivElement | null>(null);
-    // Guards against out-of-order responses when pages are clicked quickly.
+    // Guards against out-of-order responses when pages/sorts change quickly.
     const requestIdRef = useRef(0);
 
     const currentEntry = history[historyIndex];
+
+    const scrollTableToTop = () => {
+        // Only reset the table container's scroll, never the whole page.
+        // `scrollTo` is not implemented in jsdom, so guard it.
+        const el = tableContainerRef.current;
+        if (el && typeof el.scrollTo === 'function') {
+            el.scrollTo({ top: 0 });
+        } else if (el) {
+            el.scrollTop = 0;
+        }
+    };
 
     const load = useCallback((entry: PageEntry, kind: LoadKind) => {
         const requestId = ++requestIdRef.current;
@@ -104,16 +155,29 @@ function TenantList() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [load, initialReloadToken]);
 
-    const scrollTableToTop = () => {
-        // Only reset the table container's scroll, never the whole page.
-        // `scrollTo` is not implemented in jsdom, so guard it.
-        const el = tableContainerRef.current;
-        if (el && typeof el.scrollTo === 'function') {
-            el.scrollTo({ top: 0 });
-        } else if (el) {
-            el.scrollTop = 0;
-        }
-    };
+    /**
+     * Apply a new sort by resetting the history to a single first-page entry.
+     * Resetting (rather than reusing the current page) is deliberate: changing
+     * the sort while on page 3 must not request page 3 of the new result set,
+     * which is almost always empty.
+     */
+    const applySort = useCallback(
+        (nextOrdering: OrderingValue) => {
+            const entry: PageEntry = {
+                url: buildFirstPageUrl(nextOrdering),
+                offset: 0,
+            };
+            setHistory([entry]);
+            setHistoryIndex(0);
+            scrollTableToTop();
+            load(entry, 'sort');
+        },
+        // `scrollTableToTop` only reads a ref and `load` is stable, so this
+        // callback is stable. `history` is intentionally NOT a dependency: we
+        // always restart from a fresh single-entry history here.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [load]
+    );
 
     /** Follow the server-provided `next`/`previous` link directly. */
     const goToPage = (url: string, direction: 'next' | 'prev') => {
@@ -139,6 +203,16 @@ function TenantList() {
         load(entry, 'page');
     };
 
+    const handleOrderingChange = (value: string) => {
+        const next = (
+            ORDERING_OPTIONS.find((o) => o.value === value)?.value ?? DEFAULT_ORDERING
+        ) as OrderingValue;
+        if (next === ordering) return;
+        setOrdering(next);
+        // A discrete dropdown choice — no debounce. Restart at page 1.
+        applySort(next);
+    };
+
     const retryPage = () => {
         // Re-fetch the page we last asked for, with the same offset.
         load(currentEntry, 'page');
@@ -146,11 +220,34 @@ function TenantList() {
 
     const retryInitial = () => setInitialReloadToken((n) => n + 1);
 
+    // The toolbar is shared by every render branch (initial skeleton, initial
+    // error, and the loaded table) so it stays mounted across load states.
+    const toolbar = (
+        <div className="tenant-toolbar">
+            <label className="tenant-toolbar__field">
+                <span className="tenant-toolbar__label">Sort by</span>
+                <select
+                    className="tenant-toolbar__select"
+                    value={ordering}
+                    onChange={(e) => handleOrderingChange(e.target.value)}
+                    aria-label="Sort by"
+                >
+                    {ORDERING_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                        </option>
+                    ))}
+                </select>
+            </label>
+        </div>
+    );
+
     // --- Initial loading: skeleton rows ---
     if (loadKind === 'initial') {
         return (
             <div className="tenant-list">
                 <h2>Tenants</h2>
+                {toolbar}
                 <div className="tenant-table-container">
                     <table>
                         <thead>
@@ -173,6 +270,7 @@ function TenantList() {
         return (
             <div className="tenant-list">
                 <h2>Tenants</h2>
+                {toolbar}
                 <div className="tenant-state tenant-state--error" role="alert">
                     <p className="tenant-state__title">Couldn’t load tenants</p>
                     <p className="tenant-state__detail">
@@ -189,19 +287,23 @@ function TenantList() {
     const { count, next, previous, results } = data;
     const start = count === 0 ? 0 : currentEntry.offset + 1;
     const end = currentEntry.offset + results.length;
-    const isPaging = loadKind === 'page';
+    // Page changes and sort changes both keep the current rows visible but
+    // dimmed — the table is never blanked mid-refetch for a sort change.
+    const isBusy = loadKind === 'page' || loadKind === 'sort';
 
     return (
         <div className="tenant-list">
             <h2>Tenants</h2>
 
+            {toolbar}
+
             {count === 0 ? (
-                <p>No tenants found.</p>
+                <p className="tenant-empty">No tenants found.</p>
             ) : (
                 <div
-                    className={`tenant-table-container${isPaging ? ' tenant-table-container--loading' : ''}`}
+                    className={`tenant-table-container${isBusy ? ' tenant-table-container--loading' : ''}`}
                     ref={tableContainerRef}
-                    aria-busy={isPaging}
+                    aria-busy={isBusy}
                 >
                     <table>
                         <thead>
@@ -247,14 +349,14 @@ function TenantList() {
             <div className="tenant-pagination">
                 <span className="tenant-pagination__summary" aria-live="polite">
                     Showing {start}–{end} of {count} tenants
-                    {isPaging && <span className="tenant-pagination__spinner" aria-label="Loading" />}
+                    {isBusy && <span className="tenant-pagination__spinner" aria-label="Loading" />}
                 </span>
                 <div className="tenant-pagination__controls">
                     <button
                         type="button"
                         className="tenant-btn"
                         onClick={() => previous && goToPage(previous, 'prev')}
-                        disabled={!previous || isPaging}
+                        disabled={!previous || isBusy}
                     >
                         Previous
                     </button>
@@ -262,7 +364,7 @@ function TenantList() {
                         type="button"
                         className="tenant-btn"
                         onClick={() => next && goToPage(next, 'next')}
-                        disabled={!next || isPaging}
+                        disabled={!next || isBusy}
                     >
                         Next
                     </button>

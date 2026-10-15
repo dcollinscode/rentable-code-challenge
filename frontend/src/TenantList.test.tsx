@@ -13,11 +13,18 @@ import { Tenant } from './types';
  * reconstructing them.
  *
  * The backend returns PATH-RELATIVE links (e.g. "/api/tenants/?page=2"), so the
- * fixtures below mirror that shape.
+ * fixtures below mirror that shape. The first request always carries the
+ * default sort (?ordering=id), since "Default order" asks for raw DB order.
  */
 
-const PAGE_ONE_URL = '/api/tenants/';
-const PAGE_TWO_URL = '/api/tenants/?page=2';
+// The default sort ("Default order" -> raw DB order) sends ?ordering=id, so the
+// very first request the component makes is this URL.
+const DEFAULT_URL = '/api/tenants/?ordering=id';
+const DEFAULT_PAGE_TWO_URL = '/api/tenants/?ordering=id&page=2';
+
+// Ordered first-page URLs the component is expected to build.
+const ORDER_ASC_URL = '/api/tenants/?ordering=name';
+const ORDER_DESC_URL = '/api/tenants/?ordering=-name';
 
 function makeTenant(id: number, name: string): Tenant {
   return { id, name, unit: `U${id}`, pms_tenant_id: id };
@@ -26,14 +33,14 @@ function makeTenant(id: number, name: string): Tenant {
 // 30 tenants, 25 on page 1 and 5 on page 2 (the live-app default page size).
 const pageOne = {
   count: 30,
-  next: PAGE_TWO_URL,
+  next: DEFAULT_PAGE_TWO_URL,
   previous: null,
   results: Array.from({ length: 25 }, (_, i) => makeTenant(i + 1, `Tenant ${i + 1}`)),
 };
 const pageTwo = {
   count: 30,
   next: null,
-  previous: PAGE_ONE_URL,
+  previous: DEFAULT_URL,
   results: Array.from({ length: 5 }, (_, i) => makeTenant(i + 26, `Tenant ${i + 26}`)),
 };
 
@@ -51,11 +58,11 @@ const mockFetch = (impl: (url: string) => Promise<Response>) => {
   ) as unknown as typeof fetch;
 };
 
-/** The default happy-path server: page 1 at the bare URL, page 2 at ?page=2. */
+/** The default happy-path server: page 1 and page 2 in the default order. */
 function mockPagedServer() {
   mockFetch(async (url) => {
-    if (url === PAGE_ONE_URL) return jsonResponse(pageOne);
-    if (url === PAGE_TWO_URL) return jsonResponse(pageTwo);
+    if (url === DEFAULT_URL) return jsonResponse(pageOne);
+    if (url === DEFAULT_PAGE_TWO_URL) return jsonResponse(pageTwo);
     return new Response(JSON.stringify({ detail: 'Not found' }), {
       status: 404,
       headers: { 'Content-Type': 'application/json' },
@@ -97,7 +104,7 @@ describe('TenantList', () => {
 
     // The server-provided (relative) next link is followed as-is.
     expect(global.fetch).toHaveBeenCalledWith(
-      PAGE_TWO_URL,
+      DEFAULT_PAGE_TWO_URL,
       expect.objectContaining({ headers: { Accept: 'application/json' } })
     );
 
@@ -126,8 +133,8 @@ describe('TenantList', () => {
     let pageTwoCalls = 0;
 
     mockFetch(async (url) => {
-      if (url === PAGE_ONE_URL) return jsonResponse(pageOne);
-      if (url === PAGE_TWO_URL) {
+      if (url === DEFAULT_URL) return jsonResponse(pageOne);
+      if (url === DEFAULT_PAGE_TWO_URL) {
         pageTwoCalls += 1;
         if (pageTwoCalls === 1) {
           return new Response(JSON.stringify({ detail: 'Boom' }), {
@@ -195,5 +202,187 @@ describe('TenantList', () => {
 
     expect(await screen.findByText('Tenant 1')).toBeInTheDocument();
     expect(calls).toBe(2);
+  });
+});
+
+/**
+ * Sorting behaviour. The toolbar's "Sort by" dropdown maps to the backend's
+ * ?ordering param: "id" -> default/raw DB order, "name" -> A–Z, "-name" -> Z–A.
+ */
+describe('TenantList sorting', () => {
+  // Z–A ordering (as the server would return for ?ordering=-name).
+  const orderedDescPage = {
+    count: 2,
+    next: null,
+    previous: null,
+    results: [makeTenant(2, 'Zed'), makeTenant(1, 'Anna')],
+  };
+
+  /** Serve the default page, the ordered page, and the descending-ordered page. */
+  function mockSortServer(overrides: Record<string, unknown> = {}) {
+    const routes: Record<string, unknown> = {
+      [DEFAULT_URL]: pageOne,
+      [DEFAULT_PAGE_TWO_URL]: pageTwo,
+      [ORDER_DESC_URL]: orderedDescPage,
+      ...overrides,
+    };
+    mockFetch(async (url) => {
+      if (url in routes) return jsonResponse(routes[url]);
+      return new Response(JSON.stringify({ detail: 'Not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+  }
+
+  test('renders the Sort by dropdown with default, A–Z and Z–A options', async () => {
+    mockSortServer();
+
+    render(<TenantList />);
+    await screen.findByText('Tenant 1');
+
+    const select = screen.getByLabelText('Sort by');
+    expect(select).toBeInTheDocument();
+    expect(within(select).getByRole('option', { name: 'Default order' })).toBeInTheDocument();
+    expect(within(select).getByRole('option', { name: 'Name (A–Z)' })).toBeInTheDocument();
+    expect(within(select).getByRole('option', { name: 'Name (Z–A)' })).toBeInTheDocument();
+  });
+
+  test('selecting "Name (Z–A)" requests ?ordering=-name and reorders the table', async () => {
+    mockSortServer();
+
+    render(<TenantList />);
+    await screen.findByText('Tenant 1');
+
+    await userEvent.selectOptions(screen.getByLabelText('Sort by'), 'Name (Z–A)');
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        ORDER_DESC_URL,
+        expect.objectContaining({ headers: { Accept: 'application/json' } })
+      )
+    );
+
+    // Wait for the reordered rows to render, then assert their order.
+    await screen.findByText('Zed');
+    const rows = screen.getAllByRole('row');
+    // rows[0] is the header; the first data row should be "Zed".
+    expect(within(rows[1]).getByText('Zed')).toBeInTheDocument();
+    expect(within(rows[2]).getByText('Anna')).toBeInTheDocument();
+  });
+
+  test('selecting "Name (A–Z)" requests ?ordering=name', async () => {
+    mockSortServer({ [ORDER_ASC_URL]: orderedDescPage });
+
+    render(<TenantList />);
+    await screen.findByText('Tenant 1');
+
+    await userEvent.selectOptions(screen.getByLabelText('Sort by'), 'Name (A–Z)');
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        ORDER_ASC_URL,
+        expect.objectContaining({ headers: { Accept: 'application/json' } })
+      )
+    );
+  });
+
+  test('the initial load requests the default (DB) order explicitly', async () => {
+    mockSortServer();
+
+    render(<TenantList />);
+    await screen.findByText('Tenant 1');
+
+    // The first fetch asks for ?ordering=id (raw DB order), not the bare URL.
+    expect(global.fetch).toHaveBeenCalledWith(
+      DEFAULT_URL,
+      expect.objectContaining({ headers: { Accept: 'application/json' } })
+    );
+    expect(screen.getByLabelText('Sort by')).toHaveValue('id');
+  });
+
+  test('selecting "Default order" requests ?ordering=id', async () => {
+    mockSortServer();
+
+    render(<TenantList />);
+    await screen.findByText('Tenant 1');
+
+    // Go to Z–A first, then back to the default order.
+    await userEvent.selectOptions(screen.getByLabelText('Sort by'), 'Name (Z–A)');
+    await screen.findByText('Zed');
+
+    await userEvent.selectOptions(screen.getByLabelText('Sort by'), 'Default order');
+
+    // The last request must ask for the default (DB) order explicitly.
+    await waitFor(() => {
+      const calls = (global.fetch as jest.Mock).mock.calls.map((c) => String(c[0]));
+      const last = calls[calls.length - 1];
+      expect(last).toBe(DEFAULT_URL);
+    });
+    expect(await screen.findByText('Tenant 1')).toBeInTheDocument();
+  });
+
+  test('changing the sort resets pagination to page 1', async () => {
+    mockSortServer();
+
+    render(<TenantList />);
+    await screen.findByText('Tenant 1');
+
+    // Go to page 2 first.
+    userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Tenant 26');
+
+    // Changing sort must restart at page 1 of the ordered set, not page 2.
+    await userEvent.selectOptions(screen.getByLabelText('Sort by'), 'Name (Z–A)');
+    await screen.findByText('Zed');
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        ORDER_DESC_URL,
+        expect.objectContaining({ headers: { Accept: 'application/json' } })
+      )
+    );
+    // It must NOT request a page=2 variant of the ordered URL.
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      '/api/tenants/?ordering=-name&page=2',
+      expect.anything()
+    );
+  });
+
+  test('pagination preserves the active sort (Next follows the ordered link)', async () => {
+    const ORDER_DESC_PAGE_TWO_URL = '/api/tenants/?ordering=-name&page=2';
+    const orderedDescFirstPage = {
+      count: 30,
+      next: ORDER_DESC_PAGE_TWO_URL,
+      previous: null,
+      results: Array.from({ length: 25 }, (_, i) => makeTenant(100 + i, `Sorted ${i + 1}`)),
+    };
+    const orderedDescSecondPage = {
+      count: 30,
+      next: null,
+      previous: ORDER_DESC_URL,
+      results: Array.from({ length: 5 }, (_, i) => makeTenant(200 + i, `Sorted Next ${i + 1}`)),
+    };
+
+    mockSortServer({
+      [ORDER_DESC_URL]: orderedDescFirstPage,
+      [ORDER_DESC_PAGE_TWO_URL]: orderedDescSecondPage,
+    });
+
+    render(<TenantList />);
+    await screen.findByText('Tenant 1');
+
+    await userEvent.selectOptions(screen.getByLabelText('Sort by'), 'Name (Z–A)');
+    await screen.findByText('Sorted 1');
+
+    // Clicking Next must follow the server's ordered next link as-is.
+    userEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText('Sorted Next 1')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      ORDER_DESC_PAGE_TWO_URL,
+      expect.objectContaining({ headers: { Accept: 'application/json' } })
+    );
+    expect(screen.getByText(/Showing\s*26–30 of 30 tenants/)).toBeInTheDocument();
   });
 });
