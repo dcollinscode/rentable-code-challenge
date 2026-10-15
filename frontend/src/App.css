@@ -57,8 +57,202 @@
   background-color: #f9f9f9;
 }
 
+.dev-state-toggle {
+  width: 80%;
+  margin: 0 auto 12px;
+  padding: 8px 12px;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.dev-state-toggle select {
+  padding: 4px 6px;
+}
+
+.dev-state-toggle__hint {
+  color: #8c6d1f;
+  margin-left: 8px;
+}
+
 .App-link {
   color: #61dafb;
+}
+
+/* --- Tenants sort toolbar --- */
+
+.tenant-toolbar {
+  width: 80%;
+  margin: 0 auto 12px;
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.tenant-toolbar__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tenant-toolbar__label {
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.tenant-toolbar__select {
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  background: #fff;
+}
+
+.tenant-empty {
+  width: 80%;
+  margin: 20px auto;
+  color: #6b7280;
+}
+
+/* Scrollable wrapper: page changes scroll *this* to top, not the window. */
+.tenant-table-container {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* Keep the current rows visible but dimmed during a page change. */
+.tenant-table-container--loading {
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 0.12s ease-out;
+}
+
+.tenant-pagination {
+  width: 80%;
+  margin: 12px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.tenant-pagination__summary {
+  color: #333;
+  font-size: 0.9rem;
+}
+
+.tenant-pagination__controls {
+  display: flex;
+  gap: 8px;
+}
+
+.tenant-btn {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.tenant-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.tenant-btn:disabled {
+  background: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.tenant-pagination__spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-left: 8px;
+  border: 2px solid #cbd5e1;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  vertical-align: middle;
+  animation: tenant-spin 0.7s linear infinite;
+}
+
+@keyframes tenant-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Inline page-load error, shown under the table without clearing rows. */
+.tenant-page-error {
+  width: 80%;
+  margin: 12px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #991b1b;
+  font-size: 0.875rem;
+}
+
+/* Initial-load error replaces the table content. */
+.tenant-state {
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.tenant-state--error {
+  color: #991b1b;
+}
+
+.tenant-state__title {
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.tenant-state__detail {
+  color: #6b7280;
+  font-size: 0.875rem;
+  margin: 0 0 16px;
+}
+
+/* Skeleton rows */
+.tenant-skeleton__cell {
+  display: block;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #eee 25%, #f5f5f5 37%, #eee 63%);
+  background-size: 400% 100%;
+  animation: tenant-shimmer 1.4s ease infinite;
+}
+
+.tenant-skeleton__cell--sm {
+  width: 80px;
+}
+
+@keyframes tenant-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+.tenant-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 @keyframes App-logo-spin {
