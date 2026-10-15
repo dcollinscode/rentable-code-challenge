@@ -62,8 +62,12 @@ class TenantListEndpointTests(TestCase):
             [Tenant(name="Duplicate Name") for _ in range(30)]
         )
 
-        page_one = self.client.get(self._url({"page": 1, "page_size": 100})).json()
-        page_two = self.client.get(self._url({"page": 2, "page_size": 100})).json()
+        page_one = self.client.get(
+            self._url({"ordering": "name", "page": 1, "page_size": 100})
+        ).json()
+        page_two = self.client.get(
+            self._url({"ordering": "name", "page": 2, "page_size": 100})
+        ).json()
 
         ids = [t["id"] for t in page_one["results"] + page_two["results"]]
         self.assertEqual(len(ids), len(set(ids)), "duplicate ids across pages")
@@ -71,6 +75,87 @@ class TenantListEndpointTests(TestCase):
         # Names are non-decreasing across the concatenated pages.
         names = [t["name"] for t in page_one["results"] + page_two["results"]]
         self.assertEqual(names, sorted(names))
+
+    # --- Ordering: ?ordering ---
+
+    def _make_unsorted_tenants(self):
+        """Tenants whose insertion (id) order differs from name (A–Z) order."""
+        Tenant.objects.bulk_create(
+            [
+                Tenant(name="Charlie"),
+                Tenant(name="Alice"),
+                Tenant(name="Bob"),
+            ]
+        )
+
+    def test_default_ordering_is_id_not_name(self):
+        # The default is the raw database order (id), NOT alphabetical — so the
+        # rows come back in creation order.
+        self._make_unsorted_tenants()
+
+        data = self.client.get(self._url()).json()
+
+        names = [t["name"] for t in data["results"]]
+        ids = [t["id"] for t in data["results"]]
+        self.assertEqual(names, ["Charlie", "Alice", "Bob"])
+        self.assertEqual(ids, sorted(ids))
+
+    def test_ordering_id_matches_default(self):
+        self._make_unsorted_tenants()
+
+        default = self.client.get(self._url()).json()
+        explicit = self.client.get(self._url({"ordering": "id"})).json()
+
+        self.assertEqual(
+            [t["id"] for t in default["results"]],
+            [t["id"] for t in explicit["results"]],
+        )
+
+    def test_ordering_name_ascending(self):
+        self._make_unsorted_tenants()
+
+        data = self.client.get(self._url({"ordering": "name"})).json()
+
+        names = [t["name"] for t in data["results"]]
+        self.assertEqual(names, ["Alice", "Bob", "Charlie"])
+
+    def test_ordering_name_descending(self):
+        self._make_unsorted_tenants()
+
+        data = self.client.get(self._url({"ordering": "-name"})).json()
+
+        names = [t["name"] for t in data["results"]]
+        self.assertEqual(names, ["Charlie", "Bob", "Alice"])
+
+    def test_invalid_ordering_falls_back_to_default(self):
+        self._make_unsorted_tenants()
+
+        # No 400 — an unsupported value silently uses the default (id order).
+        response = self.client.get(self._url({"ordering": "bogus; DROP TABLE"}))
+        self.assertEqual(response.status_code, 200)
+
+        names = [t["name"] for t in response.json()["results"]]
+        self.assertEqual(names, ["Charlie", "Alice", "Bob"])
+
+    def test_ordering_name_keeps_id_tiebreaker(self):
+        # Equal names must stay stably ordered by id so pagination is stable.
+        Tenant.objects.bulk_create([Tenant(name="SameName") for _ in range(5)])
+
+        data = self.client.get(
+            self._url({"ordering": "name", "page_size": 100})
+        ).json()
+
+        ids = [t["id"] for t in data["results"]]
+        self.assertEqual(ids, sorted(ids))
+
+    def test_ordering_survives_onto_next_link(self):
+        self._make_tenants(30)
+
+        data = self.client.get(self._url({"ordering": "-name"})).json()
+
+        self.assertIsNotNone(data["next"])
+        # The ordering param is carried forward on the server-built next link.
+        self.assertIn("ordering=-name", data["next"])
 
     def test_next_link_is_relative_and_preserves_path(self):
         self._make_tenants(30)
